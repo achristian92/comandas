@@ -52,8 +52,68 @@ class PrintController extends Controller
                 $ticketer->finalize();
                 return;
             }
+
+            $visited = [];
+            $this->deepCloseEscposObjects($ticketer, $visited, 0);
         } catch (\Throwable $e) {
             Log::warning('Error cerrando ticketer', ['error' => $e->getMessage()]);
+        }
+    }
+
+    private function deepCloseEscposObjects($value, array &$visited, int $depth): void
+    {
+        if ($depth > 3) {
+            return;
+        }
+
+        if (!is_object($value) && !is_array($value)) {
+            return;
+        }
+
+        if (is_object($value)) {
+            $id = spl_object_id($value);
+            if (isset($visited[$id])) {
+                return;
+            }
+            $visited[$id] = true;
+
+            $class = get_class($value);
+            $isEscposRelated = (stripos($class, 'Mike42\\Escpos\\') === 0)
+                || (stripos($class, 'PrintConnector') !== false)
+                || (stripos($class, 'Printer') !== false);
+
+            if ($isEscposRelated) {
+                try {
+                    if (method_exists($value, 'close')) {
+                        $value->close();
+                    }
+
+                    if (method_exists($value, 'finalize')) {
+                        $value->finalize();
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning('Error cerrando objeto escpos', [
+                        'class' => $class,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            try {
+                $ref = new \ReflectionObject($value);
+                foreach ($ref->getProperties() as $prop) {
+                    $prop->setAccessible(true);
+                    $this->deepCloseEscposObjects($prop->getValue($value), $visited, $depth + 1);
+                }
+            } catch (\Throwable $e) {
+                return;
+            }
+
+            return;
+        }
+
+        foreach ($value as $v) {
+            $this->deepCloseEscposObjects($v, $visited, $depth + 1);
         }
     }
 
