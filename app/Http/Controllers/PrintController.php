@@ -23,14 +23,38 @@ class PrintController extends Controller
         };
     }
 
-    private function createNetworkTicketer($printer, $issue_date = null): Ticketer
+    private function createNetworkTicketer($printer = null, $issue_date = null): Ticketer
     {
+        if ($printer === null) {
+            $printer = [
+                'pr_ip' => (string) config('ticketer.conexion.connector_descriptor'),
+                'pr_port' => (string) config('ticketer.conexion.connector_port', '9100'),
+            ];
+        }
+
         $ticketer = new Ticketer();
-        $ticketer->init('network', $printer['pr_ip'], '9100');
+        $ticketer->init('network', $printer['pr_ip'], (string) ($printer['pr_port'] ?? '9100'));
         if($issue_date)
             $ticketer->setFechaEmision($issue_date);
 
         return $ticketer;
+    }
+
+    private function safeCloseTicketer(Ticketer $ticketer): void
+    {
+        try {
+            if (method_exists($ticketer, 'close')) {
+                $ticketer->close();
+                return;
+            }
+
+            if (method_exists($ticketer, 'finalize')) {
+                $ticketer->finalize();
+                return;
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Error cerrando ticketer', ['error' => $e->getMessage()]);
+        }
     }
 
     private function command($data)
@@ -48,55 +72,84 @@ class PrintController extends Controller
 
     private function printCocinaDetail(Ticketer $ticketer, array $detail): bool
     {
-        $ticketer->setCliente($detail['client']['c_name']);
-        $ticketer->setAmbiente($detail['table']['t_name'].' - '.$detail['table']['t_salon']);
-        $ticketer->setMozo($detail['waiter']['u_name']);
+        try {
+            $ticketer->setCliente($detail['client']['c_name']);
+            $ticketer->setAmbiente($detail['table']['t_name'].' - '.$detail['table']['t_salon']);
+            $ticketer->setMozo($detail['waiter']['u_name']);
 
-        foreach ($detail['items'] as $item) {
-            $ticketer->addItem($item['i_name'], $item['i_quantity'], null, false, false, false);
+            foreach ($detail['items'] as $item) {
+                $ticketer->addItem($item['i_name'], $item['i_quantity'], null, false, false, false);
+            }
+
+            return (bool) $ticketer->printCocina();
+        } catch (\Throwable $e) {
+            Log::error('Error imprimiendo comanda de cocina', [
+                'error' => $e->getMessage(),
+                'printer' => $detail['printer']['pr_ip'] ?? null,
+            ]);
+            return false;
+        } finally {
+            $this->safeCloseTicketer($ticketer);
         }
-
-        return $ticketer->printCocina();
     }
 
     private function preAccount($data)
     {
         $detail = $data['details'];
         $ticketer = $this->createNetworkTicketer($detail['printer']);
-        $ticketer->setFechaEmision($detail['order']['issue_date']);
-        $ticketer->setCliente($detail['client']['c_name']);
-        $ticketer->setAmbiente($detail['table']['t_name'].' - '.$detail['table']['t_salon']);
-        foreach ($detail['items'] as $item) {
-            $ticketer->addItem($item['i_name'], $item['i_quantity'], $item['i_price'], false, $item['i_free']);
+        try {
+            $ticketer->setFechaEmision($detail['order']['issue_date']);
+            $ticketer->setCliente($detail['client']['c_name']);
+            $ticketer->setAmbiente($detail['table']['t_name'].' - '.$detail['table']['t_salon']);
+            foreach ($detail['items'] as $item) {
+                $ticketer->addItem($item['i_name'], $item['i_quantity'], $item['i_price'], false, $item['i_free']);
+            }
+
+            $ticketer->setMozo($detail['waiter']['u_name']);
+
+            return $ticketer->printAvance()
+                ? response()->json(['status' => 'ok'])
+                : response()->json(['status' => 'error'], 500);
+        } catch (\Throwable $e) {
+            Log::error('Error imprimiendo pre-cuenta', [
+                'error' => $e->getMessage(),
+                'printer' => $detail['printer']['pr_ip'] ?? null,
+            ]);
+            return response()->json(['status' => 'error'], 500);
+        } finally {
+            $this->safeCloseTicketer($ticketer);
         }
-
-        $ticketer->setMozo($detail['waiter']['u_name']);
-
-        $ticketer->printAvance();
     }
 
     private function voucher($data)
     {
         $ticketer = $this->createNetworkTicketer();
-        $ticketer->setStore($this->loadCompany($data['company']));
-        $ticketer->setComprobante('BOLETA');
-        $ticketer->setSerieComprobante('B001');
-        $ticketer->setNumeroComprobante('000000100');
-        $ticketer->setTipoComprobante('01');
-        $ticketer->setCliente('Edwin Alexander Bautista Villegas');
-        $ticketer->setTipoDocumento(1);
-        $ticketer->setNumeroDocumento('72462226');
-        $ticketer->setTipoDocumento('01');
-        $ticketer->setDireccion('Jr. Enarte Torres 421 - Santa Lucia');
-        $ticketer->setTipoDetalle('DETALLADO');
+        try {
+            $ticketer->setStore($this->loadCompany($data['company']));
+            $ticketer->setComprobante('BOLETA');
+            $ticketer->setSerieComprobante('B001');
+            $ticketer->setNumeroComprobante('000000100');
+            $ticketer->setTipoComprobante('01');
+            $ticketer->setCliente('Edwin Alexander Bautista Villegas');
+            $ticketer->setTipoDocumento(1);
+            $ticketer->setNumeroDocumento('72462226');
+            $ticketer->setTipoDocumento('01');
+            $ticketer->setDireccion('Jr. Enarte Torres 421 - Santa Lucia');
+            $ticketer->setTipoDetalle('DETALLADO');
 
-        foreach ($data['details']['items'] as $item) {
-            $ticketer->addItem($item['i_name'], $item['i_quantity']);
+            foreach ($data['details']['items'] as $item) {
+                $ticketer->addItem($item['i_name'], $item['i_quantity']);
+            }
+
+            return $ticketer->printComprobante()
+                ? response()->json(['status' => 'ok'])
+                : response()->json(['status' => 'error'], 500);
+        } catch (\Throwable $e) {
+            Log::error('Error imprimiendo voucher', ['error' => $e->getMessage()]);
+            return response()->json(['status' => 'error'], 500);
+        } finally {
+            $this->safeCloseTicketer($ticketer);
         }
-
-        return $ticketer->printComprobante()
-            ? response()->json(['status' => 'ok'])
-            : response()->json(['status' => 'error'], 500);
     }
 
     private function loadCompany(array $company)
