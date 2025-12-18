@@ -119,8 +119,14 @@ class PrintController extends Controller
 
     private function command($data)
     {
+        Log::info('Print command received', [
+            'type' => 'Command',
+            'details_count' => is_array($data['details'] ?? null) ? count($data['details']) : null,
+            'created_at' => $data['created_at'] ?? null,
+        ]);
+
         $allOk = collect($data['details'])
-            ->map(fn($detail) => $this->printCocinaDetail($this->createNetworkTicketer($detail['printer'],$data['created_at']), $detail))
+            ->map(fn($detail) => $this->printCocinaDetail($detail, $data['created_at'] ?? null))
             ->every(fn($ok) => $ok);
 
         if ($allOk) {
@@ -130,9 +136,23 @@ class PrintController extends Controller
         }
     }
 
-    private function printCocinaDetail(Ticketer $ticketer, array $detail): bool
+    private function printCocinaDetail(array $detail, $issueDate = null): bool
     {
+        $printerIp = $detail['printer']['pr_ip'] ?? null;
+        $printerPort = $detail['printer']['pr_port'] ?? '9100';
+        Log::info('Print cocina start', [
+            'type' => 'Command',
+            'printer_ip' => $printerIp,
+            'printer_port' => $printerPort,
+            'table' => ($detail['table']['t_name'] ?? null),
+            'salon' => ($detail['table']['t_salon'] ?? null),
+            'client' => ($detail['client']['c_name'] ?? null),
+            'items_count' => is_array($detail['items'] ?? null) ? count($detail['items']) : null,
+        ]);
+
+        $ticketer = null;
         try {
+            $ticketer = $this->createNetworkTicketer($detail['printer'] ?? null, $issueDate);
             $ticketer->setCliente($detail['client']['c_name']);
             $ticketer->setAmbiente($detail['table']['t_name'].' - '.$detail['table']['t_salon']);
             $ticketer->setMozo($detail['waiter']['u_name']);
@@ -141,23 +161,47 @@ class PrintController extends Controller
                 $ticketer->addItem($item['i_name'], $item['i_quantity'], null, false, false, false);
             }
 
-            return (bool) $ticketer->printCocina();
+            $ok = (bool) $ticketer->printCocina();
+            Log::info('Print cocina done', [
+                'type' => 'Command',
+                'printer_ip' => $printerIp,
+                'printer_port' => $printerPort,
+                'ok' => $ok,
+            ]);
+            return $ok;
         } catch (\Throwable $e) {
             Log::error('Error imprimiendo comanda de cocina', [
                 'error' => $e->getMessage(),
-                'printer' => $detail['printer']['pr_ip'] ?? null,
+                'printer_ip' => $printerIp,
+                'printer_port' => $printerPort,
             ]);
             return false;
         } finally {
-            $this->safeCloseTicketer($ticketer);
+            if ($ticketer instanceof Ticketer) {
+                $this->safeCloseTicketer($ticketer);
+            }
         }
     }
 
     private function preAccount($data)
     {
         $detail = $data['details'];
-        $ticketer = $this->createNetworkTicketer($detail['printer']);
+        $printerIp = $detail['printer']['pr_ip'] ?? null;
+        $printerPort = $detail['printer']['pr_port'] ?? '9100';
+        Log::info('Print preAccount start', [
+            'type' => 'PreAccount',
+            'printer_ip' => $printerIp,
+            'printer_port' => $printerPort,
+            'issue_date' => $detail['order']['issue_date'] ?? null,
+            'table' => ($detail['table']['t_name'] ?? null),
+            'salon' => ($detail['table']['t_salon'] ?? null),
+            'client' => ($detail['client']['c_name'] ?? null),
+            'items_count' => is_array($detail['items'] ?? null) ? count($detail['items']) : null,
+        ]);
+
+        $ticketer = null;
         try {
+            $ticketer = $this->createNetworkTicketer($detail['printer']);
             $ticketer->setFechaEmision($detail['order']['issue_date']);
             $ticketer->setCliente($detail['client']['c_name']);
             $ticketer->setAmbiente($detail['table']['t_name'].' - '.$detail['table']['t_salon']);
@@ -167,17 +211,27 @@ class PrintController extends Controller
 
             $ticketer->setMozo($detail['waiter']['u_name']);
 
-            return $ticketer->printAvance()
+            $ok = (bool) $ticketer->printAvance();
+            Log::info('Print preAccount done', [
+                'type' => 'PreAccount',
+                'printer_ip' => $printerIp,
+                'printer_port' => $printerPort,
+                'ok' => $ok,
+            ]);
+            return $ok
                 ? response()->json(['status' => 'ok'])
                 : response()->json(['status' => 'error'], 500);
         } catch (\Throwable $e) {
             Log::error('Error imprimiendo pre-cuenta', [
                 'error' => $e->getMessage(),
-                'printer' => $detail['printer']['pr_ip'] ?? null,
+                'printer_ip' => $printerIp,
+                'printer_port' => $printerPort,
             ]);
             return response()->json(['status' => 'error'], 500);
         } finally {
-            $this->safeCloseTicketer($ticketer);
+            if ($ticketer instanceof Ticketer) {
+                $this->safeCloseTicketer($ticketer);
+            }
         }
     }
 
