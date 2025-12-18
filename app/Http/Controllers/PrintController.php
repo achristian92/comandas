@@ -40,6 +40,38 @@ class PrintController extends Controller
         return $ticketer;
     }
 
+    private function sendRawToPrinter(string $ip, int $port, string $payload): void
+    {
+        $errno = 0;
+        $errstr = '';
+        $fp = @fsockopen($ip, $port, $errno, $errstr, 3);
+        if (!$fp) {
+            throw new \RuntimeException("No se pudo conectar a impresora $ip:$port ($errno) $errstr");
+        }
+
+        stream_set_timeout($fp, 5);
+        try {
+            $written = fwrite($fp, $payload);
+            if ($written === false) {
+                throw new \RuntimeException("No se pudo escribir a impresora $ip:$port");
+            }
+            fflush($fp);
+        } finally {
+            fclose($fp);
+        }
+    }
+
+    private function escposCut(): string
+    {
+        return pack('C*', 0x1D, 0x56, 0x00);
+    }
+
+    private function escposFeed(int $lines = 3): string
+    {
+        $lines = max(0, min(10, $lines));
+        return pack('C*', 0x1B, 0x64, $lines);
+    }
+
     private function safeCloseTicketer(Ticketer $ticketer): void
     {
         try {
@@ -150,18 +182,35 @@ class PrintController extends Controller
             'items_count' => is_array($detail['items'] ?? null) ? count($detail['items']) : null,
         ]);
 
-        $ticketer = null;
         try {
-            $ticketer = $this->createNetworkTicketer($detail['printer'] ?? null, $issueDate);
-            $ticketer->setCliente($detail['client']['c_name']);
-            $ticketer->setAmbiente($detail['table']['t_name'].' - '.$detail['table']['t_salon']);
-            $ticketer->setMozo($detail['waiter']['u_name']);
-
-            foreach ($detail['items'] as $item) {
-                $ticketer->addItem($item['i_name'], $item['i_quantity'], null, false, false, false);
+            if (!$printerIp) {
+                throw new \RuntimeException('printer_ip vacío');
             }
 
-            $ok = (bool) $ticketer->printCocina();
+            $port = (int) $printerPort;
+            $lines = [];
+            $lines[] = 'COMANDA';
+            if ($issueDate) {
+                $lines[] = 'FECHA: ' . (string) $issueDate;
+            }
+            $lines[] = 'MESA: ' . ($detail['table']['t_name'] ?? '-');
+            $lines[] = 'SALON: ' . ($detail['table']['t_salon'] ?? '-');
+            $lines[] = 'CLIENTE: ' . ($detail['client']['c_name'] ?? '-');
+            $lines[] = 'MOZO: ' . ($detail['waiter']['u_name'] ?? '-');
+            $lines[] = str_repeat('-', 32);
+
+            foreach (($detail['items'] ?? []) as $item) {
+                $qty = (string) ($item['i_quantity'] ?? '1');
+                $name = (string) ($item['i_name'] ?? '');
+                $lines[] = $qty . '  ' . $name;
+            }
+
+            $payload = implode("\n", $lines) . "\n";
+            $payload .= $this->escposFeed(4);
+            $payload .= $this->escposCut();
+
+            $this->sendRawToPrinter((string) $printerIp, $port, $payload);
+            $ok = true;
             Log::info('Print cocina done', [
                 'type' => 'Command',
                 'printer_ip' => $printerIp,
@@ -176,10 +225,6 @@ class PrintController extends Controller
                 'printer_port' => $printerPort,
             ]);
             return false;
-        } finally {
-            if ($ticketer instanceof Ticketer) {
-                $this->safeCloseTicketer($ticketer);
-            }
         }
     }
 
@@ -199,19 +244,42 @@ class PrintController extends Controller
             'items_count' => is_array($detail['items'] ?? null) ? count($detail['items']) : null,
         ]);
 
-        $ticketer = null;
         try {
-            $ticketer = $this->createNetworkTicketer($detail['printer']);
-            $ticketer->setFechaEmision($detail['order']['issue_date']);
-            $ticketer->setCliente($detail['client']['c_name']);
-            $ticketer->setAmbiente($detail['table']['t_name'].' - '.$detail['table']['t_salon']);
-            foreach ($detail['items'] as $item) {
-                $ticketer->addItem($item['i_name'], $item['i_quantity'], $item['i_price'], false, $item['i_free']);
+            if (!$printerIp) {
+                throw new \RuntimeException('printer_ip vacío');
             }
 
-            $ticketer->setMozo($detail['waiter']['u_name']);
+            $port = (int) $printerPort;
+            $lines = [];
+            $lines[] = 'PRE-CUENTA';
+            $lines[] = 'FECHA: ' . (string) ($detail['order']['issue_date'] ?? '-');
+            $lines[] = 'MESA: ' . ($detail['table']['t_name'] ?? '-');
+            $lines[] = 'SALON: ' . ($detail['table']['t_salon'] ?? '-');
+            $lines[] = 'CLIENTE: ' . ($detail['client']['c_name'] ?? '-');
+            $lines[] = 'MOZO: ' . ($detail['waiter']['u_name'] ?? '-');
+            $lines[] = str_repeat('-', 32);
 
-            $ok = (bool) $ticketer->printAvance();
+            $total = 0.0;
+            foreach (($detail['items'] ?? []) as $item) {
+                $qty = (float) ($item['i_quantity'] ?? 1);
+                $price = (float) ($item['i_price'] ?? 0);
+                $name = (string) ($item['i_name'] ?? '');
+                $free = (bool) ($item['i_free'] ?? false);
+                $lineTotal = $free ? 0.0 : ($qty * $price);
+                $total += $lineTotal;
+                $lines[] = (string) ((int) $qty) . '  ' . $name;
+                $lines[] = '    ' . ($free ? 'GRATIS' : number_format($lineTotal, 2, '.', ''));
+            }
+
+            $lines[] = str_repeat('-', 32);
+            $lines[] = 'TOTAL: ' . number_format($total, 2, '.', '');
+
+            $payload = implode("\n", $lines) . "\n";
+            $payload .= $this->escposFeed(4);
+            $payload .= $this->escposCut();
+
+            $this->sendRawToPrinter((string) $printerIp, $port, $payload);
+            $ok = true;
             Log::info('Print preAccount done', [
                 'type' => 'PreAccount',
                 'printer_ip' => $printerIp,
@@ -228,10 +296,6 @@ class PrintController extends Controller
                 'printer_port' => $printerPort,
             ]);
             return response()->json(['status' => 'error'], 500);
-        } finally {
-            if ($ticketer instanceof Ticketer) {
-                $this->safeCloseTicketer($ticketer);
-            }
         }
     }
 
