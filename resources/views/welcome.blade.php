@@ -131,36 +131,40 @@
     <script src="{{ mix('js/app.js') }}"></script>
     <script>
         Pusher.logToConsole = true;
-        // Asumiendo que tienes disponible companyId y boxId
         const companyUuid = '24f973dd-d076-432a-a8df-b3ed33e29ca2';
         const channelName = `${companyUuid}.commands`;
-
-        // Debug: subscribe directly and log subscription success
-        const pusher = window.Echo.connector.pusher;
-        const pChannel = pusher.subscribe(channelName);
-        pChannel.bind('pusher:subscription_succeeded', () => {
-            console.log(`✅ Suscrito correctamente al canal ${channelName}`);
-        });
+        const instanceId = Math.random().toString(36).substring(7);
+        
+        console.log(`🔵 Instancia ${instanceId} iniciada`);
 
         window.Echo
             .channel(channelName)
             .listen('NewCommand', async (data) => {
-                console.log('Llega pedido para imprimir:', data)
+                const eventId = Math.random().toString(36).substring(7);
+                const timestamp = new Date().toISOString();
+                
+                console.log(`🟢 [${instanceId}][${eventId}] Evento recibido a las ${timestamp}`);
+                console.log(`📦 [${instanceId}][${eventId}] Data:`, data);
 
                 try {
-                    const resp = await fetch('http://ticket2.test/print', {
+                    console.log(`📤 [${instanceId}][${eventId}] Enviando a backend...`);
+                    const resp = await fetch('http://comandas.test/print', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'X-Frontend-Instance': instanceId,
+                            'X-Event-Id': eventId
+                        },
                         body: JSON.stringify({ data })
                     });
                     const body = await resp.json();
                     if (body.status === 'ok') {
-                        console.log('✅ Impreso correctamente');
+                        console.log(`✅ [${instanceId}][${eventId}] Impreso correctamente`);
                     } else {
-                        console.error('❌ Error al imprimir:', body.message);
+                        console.error(`❌ [${instanceId}][${eventId}] Error:`, body.message);
                     }
                 } catch (err) {
-                    console.error('❌ No pude conectar con el agente de impresión:', err);
+                    console.error(`❌ [${instanceId}][${eventId}] Error de conexión:`, err);
                 }
             });
     </script>

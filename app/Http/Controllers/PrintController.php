@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\PrintService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -13,10 +14,20 @@ class PrintController extends Controller
 {
     public function print(Request $request)
     {
+        $instanceId = $request->header('X-Frontend-Instance', 'unknown');
+        $eventId = $request->header('X-Event-Id', 'unknown');
+        
+        Log::info('🔴 REQUEST RECIBIDO EN BACKEND', [
+            'frontend_instance' => $instanceId,
+            'event_id' => $eventId,
+            'timestamp' => now()->toISOString(),
+            'type' => $request['data']['type'] ?? 'unknown',
+        ]);
+        
         $data = $request['data'];
 
         return match ($data['type']) {
-            'Command' => $this->command($data),
+            'Command' => $this->command($data, $instanceId, $eventId),
             'Voucher' => $this->voucher($data),
             'PreAccount' => $this->preAccount($data),
             default   => response()->json(['status' => 'error'], 400),
@@ -40,37 +51,11 @@ class PrintController extends Controller
         return $ticketer;
     }
 
-    private function sendRawToPrinter(string $ip, int $port, string $payload): void
+    private function printRawWithRetry(string $type, string $ip, int $port, string $payload, array $metadata = []): bool
     {
-        $errno = 0;
-        $errstr = '';
-        $fp = @fsockopen($ip, $port, $errno, $errstr, 3);
-        if (!$fp) {
-            throw new \RuntimeException("No se pudo conectar a impresora $ip:$port ($errno) $errstr");
-        }
-
-        stream_set_timeout($fp, 5);
-        try {
-            $written = fwrite($fp, $payload);
-            if ($written === false) {
-                throw new \RuntimeException("No se pudo escribir a impresora $ip:$port");
-            }
-            fflush($fp);
-        } finally {
-            fclose($fp);
-        }
+        return PrintService::printRawWithRetry($type, $ip, $port, $payload, $metadata);
     }
 
-    private function escposCut(): string
-    {
-        return pack('C*', 0x1D, 0x56, 0x00);
-    }
-
-    private function escposFeed(int $lines = 3): string
-    {
-        $lines = max(0, min(10, $lines));
-        return pack('C*', 0x1B, 0x64, $lines);
-    }
 
     private function safeCloseTicketer(Ticketer $ticketer): void
     {
@@ -149,22 +134,40 @@ class PrintController extends Controller
         }
     }
 
-    private function command($data)
+    private function command($data, $instanceId = 'unknown', $eventId = 'unknown')
     {
-        Log::info('Print command received', [
+        Log::info('🟡 PROCESANDO COMMAND', [
+            'frontend_instance' => $instanceId,
+            'event_id' => $eventId,
             'type' => 'Command',
             'details_count' => is_array($data['details'] ?? null) ? count($data['details']) : null,
             'created_at' => $data['created_at'] ?? null,
         ]);
 
-        $allOk = collect($data['details'])
-            ->map(fn($detail) => $this->printCocinaDetail($detail, $data['created_at'] ?? null))
-            ->every(fn($ok) => $ok);
-
+        $allOk = true;
+        foreach ($data['details'] as $index => $detail) {
+            Log::info("🖨️  IMPRIMIENDO DETAIL #{$index}", [
+                'frontend_instance' => $instanceId,
+                'event_id' => $eventId,
+                'printer_ip' => $detail['printer']['pr_ip'] ?? null,
+            ]);
+            
+            $ok = $this->printCocinaDetail($detail, $data['created_at'] ?? null);
+            if (!$ok) {
+                $allOk = false;
+            }
+        }
+        
+        Log::info('🏁 COMMAND FINALIZADO', [
+            'frontend_instance' => $instanceId,
+            'event_id' => $eventId,
+            'success' => $allOk,
+        ]);
+        
         if ($allOk) {
             return response()->json(['status' => 'ok']);
         } else {
-            return response()->json(['status' => 'error'], 500);
+            return response()->json(['status' => 'error', 'message' => 'Algunas impresiones fallaron'], 500);
         }
     }
 
@@ -172,60 +175,40 @@ class PrintController extends Controller
     {
         $printerIp = $detail['printer']['pr_ip'] ?? null;
         $printerPort = $detail['printer']['pr_port'] ?? '9100';
-        Log::info('Print cocina start', [
-            'type' => 'Command',
-            'printer_ip' => $printerIp,
-            'printer_port' => $printerPort,
-            'table' => ($detail['table']['t_name'] ?? null),
-            'salon' => ($detail['table']['t_salon'] ?? null),
-            'client' => ($detail['client']['c_name'] ?? null),
-            'items_count' => is_array($detail['items'] ?? null) ? count($detail['items']) : null,
-        ]);
-
-        try {
-            if (!$printerIp) {
-                throw new \RuntimeException('printer_ip vacío');
-            }
-
-            $port = (int) $printerPort;
-            $lines = [];
-            $lines[] = 'COMANDA';
-            if ($issueDate) {
-                $lines[] = 'FECHA: ' . (string) $issueDate;
-            }
-            $lines[] = 'MESA: ' . ($detail['table']['t_name'] ?? '-');
-            $lines[] = 'SALON: ' . ($detail['table']['t_salon'] ?? '-');
-            $lines[] = 'CLIENTE: ' . ($detail['client']['c_name'] ?? '-');
-            $lines[] = 'MOZO: ' . ($detail['waiter']['u_name'] ?? '-');
-            $lines[] = str_repeat('-', 32);
-
-            foreach (($detail['items'] ?? []) as $item) {
-                $qty = (string) ($item['i_quantity'] ?? '1');
-                $name = (string) ($item['i_name'] ?? '');
-                $lines[] = $qty . '  ' . $name;
-            }
-
-            $payload = implode("\n", $lines) . "\n";
-            $payload .= $this->escposFeed(4);
-            $payload .= $this->escposCut();
-
-            $this->sendRawToPrinter((string) $printerIp, $port, $payload);
-            $ok = true;
-            Log::info('Print cocina done', [
-                'type' => 'Command',
-                'printer_ip' => $printerIp,
-                'printer_port' => $printerPort,
-                'ok' => $ok,
-            ]);
-            return $ok;
-        } catch (\Throwable $e) {
-            Log::error('Error imprimiendo comanda de cocina', [
-                'error' => $e->getMessage(),
-                'printer_ip' => $printerIp,
-                'printer_port' => $printerPort,
-            ]);
+        
+        if (!$printerIp) {
+            Log::error('printer_ip vacío en comanda');
             return false;
         }
+
+        $port = (int) $printerPort;
+        $lines = [];
+        $lines[] = 'COMANDA';
+        if ($issueDate) {
+            $lines[] = 'FECHA: ' . (string) $issueDate;
+        }
+        $lines[] = 'MESA: ' . ($detail['table']['t_name'] ?? '-');
+        $lines[] = 'SALON: ' . ($detail['table']['t_salon'] ?? '-');
+        $lines[] = 'CLIENTE: ' . ($detail['client']['c_name'] ?? '-');
+        $lines[] = 'MOZO: ' . ($detail['waiter']['u_name'] ?? '-');
+        $lines[] = str_repeat('-', 32);
+
+        foreach (($detail['items'] ?? []) as $item) {
+            $qty = (string) ($item['i_quantity'] ?? '1');
+            $name = (string) ($item['i_name'] ?? '');
+            $lines[] = $qty . '  ' . $name;
+        }
+
+        $payload = PrintService::buildEscposPayload($lines, 4, true);
+        
+        $metadata = [
+            'table' => $detail['table']['t_name'] ?? null,
+            'salon' => $detail['table']['t_salon'] ?? null,
+            'client' => $detail['client']['c_name'] ?? null,
+            'items_count' => is_array($detail['items'] ?? null) ? count($detail['items']) : null,
+        ];
+
+        return $this->printRawWithRetry('Command', (string) $printerIp, $port, $payload, $metadata);
     }
 
     private function preAccount($data)
@@ -233,7 +216,8 @@ class PrintController extends Controller
         $detail = $data['details'];
         $printerIp = $detail['printer']['pr_ip'] ?? null;
         $printerPort = $detail['printer']['pr_port'] ?? '9100';
-        Log::info('Print preAccount start', [
+        
+        Log::info('Print preAccount received', [
             'type' => 'PreAccount',
             'printer_ip' => $printerIp,
             'printer_port' => $printerPort,
@@ -244,58 +228,52 @@ class PrintController extends Controller
             'items_count' => is_array($detail['items'] ?? null) ? count($detail['items']) : null,
         ]);
 
-        try {
-            if (!$printerIp) {
-                throw new \RuntimeException('printer_ip vacío');
-            }
+        if (!$printerIp) {
+            Log::error('printer_ip vacío en pre-cuenta');
+            return response()->json(['status' => 'error', 'message' => 'printer_ip vacío'], 400);
+        }
 
-            $port = (int) $printerPort;
-            $lines = [];
-            $lines[] = 'PRE-CUENTA';
-            $lines[] = 'FECHA: ' . (string) ($detail['order']['issue_date'] ?? '-');
-            $lines[] = 'MESA: ' . ($detail['table']['t_name'] ?? '-');
-            $lines[] = 'SALON: ' . ($detail['table']['t_salon'] ?? '-');
-            $lines[] = 'CLIENTE: ' . ($detail['client']['c_name'] ?? '-');
-            $lines[] = 'MOZO: ' . ($detail['waiter']['u_name'] ?? '-');
-            $lines[] = str_repeat('-', 32);
+        $port = (int) $printerPort;
+        $lines = [];
+        $lines[] = 'PRE-CUENTA';
+        $lines[] = 'FECHA: ' . (string) ($detail['order']['issue_date'] ?? '-');
+        $lines[] = 'MESA: ' . ($detail['table']['t_name'] ?? '-');
+        $lines[] = 'SALON: ' . ($detail['table']['t_salon'] ?? '-');
+        $lines[] = 'CLIENTE: ' . ($detail['client']['c_name'] ?? '-');
+        $lines[] = 'MOZO: ' . ($detail['waiter']['u_name'] ?? '-');
+        $lines[] = str_repeat('-', 32);
 
-            $total = 0.0;
-            foreach (($detail['items'] ?? []) as $item) {
-                $qty = (float) ($item['i_quantity'] ?? 1);
-                $price = (float) ($item['i_price'] ?? 0);
-                $name = (string) ($item['i_name'] ?? '');
-                $free = (bool) ($item['i_free'] ?? false);
-                $lineTotal = $free ? 0.0 : ($qty * $price);
-                $total += $lineTotal;
-                $lines[] = (string) ((int) $qty) . '  ' . $name;
-                $lines[] = '    ' . ($free ? 'GRATIS' : number_format($lineTotal, 2, '.', ''));
-            }
+        $total = 0.0;
+        foreach (($detail['items'] ?? []) as $item) {
+            $qty = (float) ($item['i_quantity'] ?? 1);
+            $price = (float) ($item['i_price'] ?? 0);
+            $name = (string) ($item['i_name'] ?? '');
+            $free = (bool) ($item['i_free'] ?? false);
+            $lineTotal = $free ? 0.0 : ($qty * $price);
+            $total += $lineTotal;
+            $lines[] = (string) ((int) $qty) . '  ' . $name;
+            $lines[] = '    ' . ($free ? 'GRATIS' : number_format($lineTotal, 2, '.', ''));
+        }
 
-            $lines[] = str_repeat('-', 32);
-            $lines[] = 'TOTAL: ' . number_format($total, 2, '.', '');
+        $lines[] = str_repeat('-', 32);
+        $lines[] = 'TOTAL: ' . number_format($total, 2, '.', '');
 
-            $payload = implode("\n", $lines) . "\n";
-            $payload .= $this->escposFeed(4);
-            $payload .= $this->escposCut();
+        $payload = PrintService::buildEscposPayload($lines, 4, true);
+        
+        $metadata = [
+            'table' => $detail['table']['t_name'] ?? null,
+            'salon' => $detail['table']['t_salon'] ?? null,
+            'client' => $detail['client']['c_name'] ?? null,
+            'total' => $total,
+            'items_count' => is_array($detail['items'] ?? null) ? count($detail['items']) : null,
+        ];
 
-            $this->sendRawToPrinter((string) $printerIp, $port, $payload);
-            $ok = true;
-            Log::info('Print preAccount done', [
-                'type' => 'PreAccount',
-                'printer_ip' => $printerIp,
-                'printer_port' => $printerPort,
-                'ok' => $ok,
-            ]);
-            return $ok
-                ? response()->json(['status' => 'ok'])
-                : response()->json(['status' => 'error'], 500);
-        } catch (\Throwable $e) {
-            Log::error('Error imprimiendo pre-cuenta', [
-                'error' => $e->getMessage(),
-                'printer_ip' => $printerIp,
-                'printer_port' => $printerPort,
-            ]);
-            return response()->json(['status' => 'error'], 500);
+        $ok = $this->printRawWithRetry('PreAccount', (string) $printerIp, $port, $payload, $metadata);
+        
+        if ($ok) {
+            return response()->json(['status' => 'ok']);
+        } else {
+            return response()->json(['status' => 'error', 'message' => 'Impresión falló después de reintentos'], 500);
         }
     }
 
