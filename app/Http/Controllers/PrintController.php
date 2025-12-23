@@ -16,14 +16,14 @@ class PrintController extends Controller
     {
         $instanceId = $request->header('X-Frontend-Instance', 'unknown');
         $eventId = $request->header('X-Event-Id', 'unknown');
-        
+
         Log::info('🔴 REQUEST RECIBIDO EN BACKEND', [
             'frontend_instance' => $instanceId,
             'event_id' => $eventId,
             'timestamp' => now()->toISOString(),
             'type' => $request['data']['type'] ?? 'unknown',
         ]);
-        
+
         $data = $request['data'];
 
         return match ($data['type']) {
@@ -151,19 +151,19 @@ class PrintController extends Controller
                 'event_id' => $eventId,
                 'printer_ip' => $detail['printer']['pr_ip'] ?? null,
             ]);
-            
+
             $ok = $this->printCocinaDetail($detail, $data['created_at'] ?? null);
             if (!$ok) {
                 $allOk = false;
             }
         }
-        
+
         Log::info('🏁 COMMAND FINALIZADO', [
             'frontend_instance' => $instanceId,
             'event_id' => $eventId,
             'success' => $allOk,
         ]);
-        
+
         if ($allOk) {
             return response()->json(['status' => 'ok']);
         } else {
@@ -175,7 +175,7 @@ class PrintController extends Controller
     {
         $printerIp = $detail['printer']['pr_ip'] ?? null;
         $printerPort = $detail['printer']['pr_port'] ?? '9100';
-        
+
         if (!$printerIp) {
             Log::error('printer_ip vacío en comanda');
             return false;
@@ -197,10 +197,17 @@ class PrintController extends Controller
             $qty = (string) ($item['i_quantity'] ?? '1');
             $name = (string) ($item['i_name'] ?? '');
             $lines[] = $qty . '  ' . $name;
+
+
+            // Agregar nota del ítem si existe
+            $note = trim((string) ($item['i_notes'] ?? ''));
+            if ($note !== '') {
+                $lines[] = '   NOTA: ' . $note;
+            }
         }
 
         $payload = PrintService::buildEscposPayload($lines, 4, true);
-        
+
         $metadata = [
             'table' => $detail['table']['t_name'] ?? null,
             'salon' => $detail['table']['t_salon'] ?? null,
@@ -216,7 +223,7 @@ class PrintController extends Controller
         $detail = $data['details'];
         $printerIp = $detail['printer']['pr_ip'] ?? null;
         $printerPort = $detail['printer']['pr_port'] ?? '9100';
-        
+
         Log::info('Print preAccount received', [
             'type' => 'PreAccount',
             'printer_ip' => $printerIp,
@@ -259,7 +266,7 @@ class PrintController extends Controller
         $lines[] = 'TOTAL: ' . number_format($total, 2, '.', '');
 
         $payload = PrintService::buildEscposPayload($lines, 4, true);
-        
+
         $metadata = [
             'table' => $detail['table']['t_name'] ?? null,
             'salon' => $detail['table']['t_salon'] ?? null,
@@ -269,7 +276,7 @@ class PrintController extends Controller
         ];
 
         $ok = $this->printRawWithRetry('PreAccount', (string) $printerIp, $port, $payload, $metadata);
-        
+
         if ($ok) {
             return response()->json(['status' => 'ok']);
         } else {
