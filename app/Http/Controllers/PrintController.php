@@ -176,10 +176,20 @@ class PrintController extends Controller
         $printerIp = $detail['printer']['pr_ip'] ?? null;
         $printerPort = $detail['printer']['pr_port'] ?? '9100';
         $printerType = strtoupper($detail['printer']['pr_type'] ?? 'RED');
+        $printerName = $detail['printer']['pr_name'] ?? null;
 
-        if (!$printerIp) {
-            Log::error('printer_ip vacío en comanda');
-            return false;
+        if ($printerType === 'USB') {
+            if (!$printerName) {
+                Log::error('printer_name vacío en comanda USB');
+                return false;
+            }
+            $printerIdentifier = $printerName;
+        } else {
+            if (!$printerIp) {
+                Log::error('printer_ip vacío en comanda RED');
+                return false;
+            }
+            $printerIdentifier = $printerIp;
         }
 
         $port = (int) $printerPort;
@@ -217,7 +227,7 @@ class PrintController extends Controller
             'items_count' => is_array($detail['items'] ?? null) ? count($detail['items']) : null,
         ];
 
-        return $this->printRawWithRetry('Command', (string) $printerIp, $port, $payload, $metadata, null, null, $printerType);
+        return $this->printRawWithRetry('Command', (string) $printerIdentifier, $port, $payload, $metadata, null, null, $printerType);
     }
 
     private function preAccount($data)
@@ -226,6 +236,7 @@ class PrintController extends Controller
         $printerIp = $detail['printer']['pr_ip'] ?? null;
         $printerPort = $detail['printer']['pr_port'] ?? '9100';
         $printerType = strtoupper($detail['printer']['pr_type'] ?? 'RED');
+        $printerName = $detail['printer']['pr_name'] ?? null;
 
         Log::info('Print preAccount received', [
             'type' => 'PreAccount',
@@ -239,9 +250,18 @@ class PrintController extends Controller
             'items_count' => is_array($detail['items'] ?? null) ? count($detail['items']) : null,
         ]);
 
-        if (!$printerIp) {
-            Log::error('printer_ip vacío en pre-cuenta');
-            return response()->json(['status' => 'error', 'message' => 'printer_ip vacío'], 400);
+        if ($printerType === 'USB') {
+            if (!$printerName) {
+                Log::error('printer_name vacío en pre-cuenta USB');
+                return response()->json(['status' => 'error', 'message' => 'printer_name vacío'], 400);
+            }
+            $printerIdentifier = $printerName;
+        } else {
+            if (!$printerIp) {
+                Log::error('printer_ip vacío en pre-cuenta RED');
+                return response()->json(['status' => 'error', 'message' => 'printer_ip vacío'], 400);
+            }
+            $printerIdentifier = $printerIp;
         }
 
         $port = (int) $printerPort;
@@ -280,7 +300,7 @@ class PrintController extends Controller
             'items_count' => is_array($detail['items'] ?? null) ? count($detail['items']) : null,
         ];
 
-        $ok = $this->printRawWithRetry('PreAccount', (string) $printerIp, $port, $payload, $metadata, null, null, $printerType);
+        $ok = $this->printRawWithRetry('PreAccount', (string) $printerIdentifier, $port, $payload, $metadata, null, null, $printerType);
 
         if ($ok) {
             return response()->json(['status' => 'ok']);
