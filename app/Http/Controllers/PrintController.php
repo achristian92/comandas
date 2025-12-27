@@ -52,9 +52,9 @@ class PrintController extends Controller
         return $ticketer;
     }
 
-    private function printRawWithRetry(string $type, string $ip, int $port, string $payload, array $metadata = []): bool
+    private function printRawWithRetry(string $type, string $ip, int $port, string $payload, array $metadata = [], ?int $maxAttempts = null, ?int $timeout = null, string $printerType = 'RED'): bool
     {
-        return PrintService::printRawWithRetry($type, $ip, $port, $payload, $metadata);
+        return PrintService::printRawWithRetry($type, $ip, $port, $payload, $metadata, $maxAttempts, $timeout, $printerType);
     }
 
 
