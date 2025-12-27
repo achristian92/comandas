@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\OkfacCallbackService;
 use App\Services\PrintService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -136,10 +137,18 @@ class PrintController extends Controller
 
     private function command($data, $instanceId = 'unknown', $eventId = 'unknown')
     {
+
+        $companyUuid = $data['company']['uuid'] ?? null;
+        $commandUuid = $data['uuid'] ?? null;
+
+
+
         Log::info('🟡 PROCESANDO COMMAND', [
             'frontend_instance' => $instanceId,
             'event_id' => $eventId,
             'type' => 'Command',
+            'company_uuid' => $companyUuid,
+            'command_uuid' => $commandUuid,
             'details_count' => is_array($data['details'] ?? null) ? count($data['details']) : null,
             'created_at' => $data['created_at'] ?? null,
         ]);
@@ -163,6 +172,22 @@ class PrintController extends Controller
             'event_id' => $eventId,
             'success' => $allOk,
         ]);
+
+
+        if ($companyUuid && $commandUuid) {
+            $errorMessage = $allOk ? null : 'Algunas impresiones fallaron';
+            OkfacCallbackService::sendCommandPrintStatus(
+                $companyUuid,
+                $commandUuid,
+                $allOk,
+                $errorMessage
+            );
+        } else {
+            Log::warning('No se pudo enviar callback a OKFAC: faltan company_uuid o command_uuid', [
+                'company_uuid' => $companyUuid,
+                'command_uuid' => $commandUuid,
+            ]);
+        }
 
         if ($allOk) {
             return response()->json(['status' => 'ok']);
