@@ -175,6 +175,7 @@ class PrintController extends Controller
     {
         $printerIp = $detail['printer']['pr_ip'] ?? null;
         $printerPort = $detail['printer']['pr_port'] ?? '9100';
+        $printerType = strtoupper($detail['printer']['pr_type'] ?? 'RED');
 
         if (!$printerIp) {
             Log::error('printer_ip vacío en comanda');
@@ -209,13 +210,14 @@ class PrintController extends Controller
         $payload = PrintService::buildEscposPayload($lines, 4, true);
 
         $metadata = [
+            'printer_type' => $printerType,
             'table' => $detail['table']['t_name'] ?? null,
             'salon' => $detail['table']['t_salon'] ?? null,
             'client' => $detail['client']['c_name'] ?? null,
             'items_count' => is_array($detail['items'] ?? null) ? count($detail['items']) : null,
         ];
 
-        return $this->printRawWithRetry('Command', (string) $printerIp, $port, $payload, $metadata);
+        return $this->printRawWithRetry('Command', (string) $printerIp, $port, $payload, $metadata, null, null, $printerType);
     }
 
     private function preAccount($data)
@@ -223,9 +225,11 @@ class PrintController extends Controller
         $detail = $data['details'];
         $printerIp = $detail['printer']['pr_ip'] ?? null;
         $printerPort = $detail['printer']['pr_port'] ?? '9100';
+        $printerType = strtoupper($detail['printer']['pr_type'] ?? 'RED');
 
         Log::info('Print preAccount received', [
             'type' => 'PreAccount',
+            'printer_type' => $printerType,
             'printer_ip' => $printerIp,
             'printer_port' => $printerPort,
             'issue_date' => $detail['order']['issue_date'] ?? null,
@@ -268,6 +272,7 @@ class PrintController extends Controller
         $payload = PrintService::buildEscposPayload($lines, 4, true);
 
         $metadata = [
+            'printer_type' => $printerType,
             'table' => $detail['table']['t_name'] ?? null,
             'salon' => $detail['table']['t_salon'] ?? null,
             'client' => $detail['client']['c_name'] ?? null,
@@ -275,7 +280,7 @@ class PrintController extends Controller
             'items_count' => is_array($detail['items'] ?? null) ? count($detail['items']) : null,
         ];
 
-        $ok = $this->printRawWithRetry('PreAccount', (string) $printerIp, $port, $payload, $metadata);
+        $ok = $this->printRawWithRetry('PreAccount', (string) $printerIp, $port, $payload, $metadata, null, null, $printerType);
 
         if ($ok) {
             return response()->json(['status' => 'ok']);

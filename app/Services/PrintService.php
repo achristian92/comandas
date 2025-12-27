@@ -13,7 +13,8 @@ class PrintService
         string $payload,
         array $metadata = [],
         int $maxAttempts = null,
-        int $timeout = null
+        int $timeout = null,
+        string $printerType = 'RED'
     ): bool {
         $maxAttempts = $maxAttempts ?? (int) config('printing.max_attempts', 5);
         $timeout = $timeout ?? (int) config('printing.socket_timeout', 5);
@@ -21,6 +22,7 @@ class PrintService
         
         Log::info('Print job started', [
             'type' => $type,
+            'printer_type' => $printerType,
             'printer_ip' => $printerIp,
             'printer_port' => $printerPort,
             'payload_size' => strlen($payload),
@@ -42,16 +44,21 @@ class PrintService
                     }
                 }
                 
-                if (!PrinterConnectivity::checkWithFallback($printerIp, $printerPort, $timeout)) {
-                    throw new \RuntimeException(
-                        sprintf('Impresora no alcanzable: %s:%d', $printerIp, $printerPort)
-                    );
+                if ($printerType === 'USB') {
+                    self::sendRawToUsbPrinter($printerIp, $payload);
+                } else {
+                    if (!PrinterConnectivity::checkWithFallback($printerIp, $printerPort, $timeout)) {
+                        throw new \RuntimeException(
+                            sprintf('Impresora no alcanzable: %s:%d', $printerIp, $printerPort)
+                        );
+                    }
+                    
+                    self::sendRawToPrinter($printerIp, $printerPort, $payload, $timeout);
                 }
-                
-                self::sendRawToPrinter($printerIp, $printerPort, $payload, $timeout);
                 
                 Log::info('Print job completed successfully', [
                     'type' => $type,
+                    'printer_type' => $printerType,
                     'printer_ip' => $printerIp,
                     'printer_port' => $printerPort,
                     'attempt' => $attempt,
@@ -64,6 +71,7 @@ class PrintService
                 
                 Log::warning('Print attempt failed', [
                     'type' => $type,
+                    'printer_type' => $printerType,
                     'printer_ip' => $printerIp,
                     'printer_port' => $printerPort,
                     'attempt' => $attempt,
@@ -74,6 +82,7 @@ class PrintService
                 if ($attempt >= $maxAttempts) {
                     Log::error('Print job failed after max attempts', [
                         'type' => $type,
+                        'printer_type' => $printerType,
                         'printer_ip' => $printerIp,
                         'printer_port' => $printerPort,
                         'attempts' => $attempt,
@@ -155,5 +164,41 @@ class PrintService
     {
         $lines = max(0, min(10, $lines));
         return pack('C*', 0x1B, 0x64, $lines);
+    }
+
+    private static function sendRawToUsbPrinter(string $printerName, string $payload): void
+    {
+        $tempFile = tempnam(sys_get_temp_dir(), 'print_');
+        
+        if ($tempFile === false) {
+            throw new \RuntimeException('No se pudo crear archivo temporal para impresión USB');
+        }
+        
+        try {
+            if (file_put_contents($tempFile, $payload) === false) {
+                throw new \RuntimeException('No se pudo escribir en archivo temporal');
+            }
+            
+            $command = sprintf('lp -d %s %s', escapeshellarg($printerName), escapeshellarg($tempFile));
+            
+            exec($command . ' 2>&1', $output, $returnCode);
+            
+            if ($returnCode !== 0) {
+                throw new \RuntimeException(
+                    sprintf('Error al imprimir en USB: %s (código: %d)', implode(' ', $output), $returnCode)
+                );
+            }
+            
+            Log::info('USB print command executed', [
+                'printer_name' => $printerName,
+                'command' => $command,
+                'output' => $output,
+            ]);
+            
+        } finally {
+            if (file_exists($tempFile)) {
+                @unlink($tempFile);
+            }
+        }
     }
 }
