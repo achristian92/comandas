@@ -203,6 +203,14 @@ class PrintController extends Controller
         $printerType = strtoupper($detail['printer']['pr_type'] ?? 'RED');
         $printerName = $detail['printer']['pr_name'] ?? null;
 
+        Log::info('🔍 DEBUG printCocinaDetail', [
+            'pr_ip' => $printerIp,
+            'pr_name' => $printerName,
+            'pr_type_original' => $detail['printer']['pr_type'] ?? 'NOT_SET',
+            'pr_type_processed' => $printerType,
+            'printer_data' => $detail['printer'] ?? 'NO_PRINTER_DATA',
+        ]);
+
         if ($printerType === 'USB') {
             if (!$printerName) {
                 Log::error('printer_name vacío en comanda USB');
