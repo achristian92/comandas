@@ -179,7 +179,13 @@ class PrintService
                 throw new \RuntimeException('No se pudo escribir en archivo temporal');
             }
             
-            $command = sprintf('lp -d %s %s', escapeshellarg($printerName), escapeshellarg($tempFile));
+            $isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
+            
+            if ($isWindows) {
+                $command = sprintf('copy /B "%s" "\\\\localhost\\%s"', $tempFile, $printerName);
+            } else {
+                $command = sprintf('lp -d %s %s', escapeshellarg($printerName), escapeshellarg($tempFile));
+            }
             
             exec($command . ' 2>&1', $output, $returnCode);
             
@@ -190,6 +196,7 @@ class PrintService
             }
             
             Log::info('USB print command executed', [
+                'os' => $isWindows ? 'Windows' : 'Unix',
                 'printer_name' => $printerName,
                 'command' => $command,
                 'output' => $output,
