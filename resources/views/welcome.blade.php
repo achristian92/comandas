@@ -21,7 +21,7 @@
         @keyframes slideIn { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
     </style>
 </head>
-<body class="bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 min-h-screen">
+<body style="background: linear-gradient(135deg, #33b394 0%, #2e4050 100%); min-height: 100vh;">
     <div class="container mx-auto p-6">
         <!-- Header -->
         <div class="bg-white rounded-xl shadow-lg p-6 mb-6">
@@ -141,19 +141,26 @@
     <script src="{{ mix('js/app.js') }}"></script>
     <script>
         const stats = { total: 0, success: 0, failed: 0 };
-        const companyUuid = '24f973dd-d076-432a-a8df-b3ed33e29ca2';
+        const companyUuid = '{{ config('okfac.company_uuid') }}';
         const channelName = `${companyUuid}.commands`;
         const instanceId = Math.random().toString(36).substring(7);
         
         document.getElementById('instanceDisplay').textContent = instanceId;
         addLog('Sistema iniciado', 'info');
 
+        // Listener genérico para ver todos los eventos
+        Echo.connector.pusher.bind_global((eventName, data) => {
+            console.log('🔔 EVENTO DETECTADO:', eventName, data);
+        });
+
         window.Echo.channel(channelName)
-            .listen('NewCommand', async (data) => {
+            .listen('NewCommand', async (eventData) => {
                 const eventId = Math.random().toString(36).substring(7);
                 const timestamp = new Date().toLocaleTimeString();
                 
-                addLog(`Comanda recibida - ${data.table?.t_name || 'N/A'}`, 'info');
+                const detail = eventData.details?.[0] || {};
+                
+                addLog(`Comanda recibida - ${detail.table?.t_name || 'N/A'} - Orden #${detail.order?.num || 'N/A'}`, 'info');
                 stats.total++;
                 updateStats();
 
@@ -165,24 +172,64 @@
                             'X-Frontend-Instance': instanceId,
                             'X-Event-Id': eventId
                         },
-                        body: JSON.stringify({ data })
+                        body: JSON.stringify({ data: eventData })
                     });
                     
                     const body = await resp.json();
                     
                     if (body.status === 'ok') {
                         stats.success++;
-                        addLog(`✅ Impresión exitosa - ${data.table?.t_name}`, 'success');
-                        addRecentCommand(data, true);
+                        addLog(`✅ Impresión exitosa - ${detail.table?.t_name}`, 'success');
+                        addRecentCommand(detail, true);
                     } else {
                         stats.failed++;
                         addLog(`❌ Error: ${body.message}`, 'error');
-                        addRecentCommand(data, false);
+                        addRecentCommand(detail, false);
                     }
                 } catch (err) {
                     stats.failed++;
                     addLog(`❌ Error de conexión: ${err.message}`, 'error');
-                    addRecentCommand(data, false);
+                    addRecentCommand(detail, false);
+                }
+                
+                updateStats();
+            })
+            .listen('NewPreAccount', async (eventData) => {
+                const eventId = Math.random().toString(36).substring(7);
+                const timestamp = new Date().toLocaleTimeString();
+                
+                const detail = eventData.details || {};
+                
+                addLog(`Precuenta recibida - ${detail.table?.t_name || 'N/A'} - Orden #${detail.order?.num || 'N/A'}`, 'info');
+                stats.total++;
+                updateStats();
+
+                try {
+                    const resp = await fetch('http://comandas.test/print', {
+                        method: 'POST',
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'X-Frontend-Instance': instanceId,
+                            'X-Event-Id': eventId
+                        },
+                        body: JSON.stringify({ data: eventData })
+                    });
+                    
+                    const body = await resp.json();
+                    
+                    if (body.status === 'ok') {
+                        stats.success++;
+                        addLog(`✅ Precuenta impresa exitosamente - ${detail.table?.t_name}`, 'success');
+                        addRecentCommand(detail, true);
+                    } else {
+                        stats.failed++;
+                        addLog(`❌ Error en precuenta: ${body.message}`, 'error');
+                        addRecentCommand(detail, false);
+                    }
+                } catch (err) {
+                    stats.failed++;
+                    addLog(`❌ Error de conexión en precuenta: ${err.message}`, 'error');
+                    addRecentCommand(detail, false);
                 }
                 
                 updateStats();
@@ -231,21 +278,51 @@
             
             const card = document.createElement('div');
             card.className = 'border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow';
+            
+            const printerInfo = data.printer?.pr_type === 'USB' 
+                ? data.printer?.pr_name 
+                : data.printer?.pr_ip;
+            
             card.innerHTML = `
-                <div class="flex items-center justify-between mb-2">
-                    <span class="font-semibold text-gray-800">${data.table?.t_name || 'N/A'}</span>
+                <div class="flex items-center justify-between mb-3">
+                    <div>
+                        <span class="font-bold text-gray-800 text-lg">${data.table?.t_name || 'N/A'}</span>
+                        <span class="text-gray-500 text-sm ml-2">Orden #${data.order?.num || 'N/A'}</span>
+                    </div>
                     <span class="badge ${success ? 'badge-success' : 'badge-error'}">${success ? 'Exitosa' : 'Fallida'}</span>
                 </div>
-                <div class="text-sm text-gray-600 space-y-1">
-                    <div>🏢 ${data.table?.t_salon || 'N/A'}</div>
-                    <div>👤 ${data.client?.c_name || 'N/A'}</div>
-                    <div>🍽️ ${data.items?.length || 0} items</div>
+                <div class="text-sm text-gray-600 space-y-1 mb-3">
                     <div class="flex items-center gap-2">
-                        <span class="badge ${data.printer?.pr_type === 'USB' ? 'badge-usb' : 'badge-red'}">
-                            ${data.printer?.pr_type || 'RED'}
-                        </span>
-                        <span class="text-xs text-gray-500">${data.printer?.pr_name || data.printer?.pr_ip || 'N/A'}</span>
+                        <span>🏢</span>
+                        <span>${data.table?.t_salon || 'N/A'}</span>
                     </div>
+                    <div class="flex items-center gap-2">
+                        <span>👤</span>
+                        <span>${data.client?.c_name || 'N/A'}</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span>👔</span>
+                        <span>Mozo: ${data.waiter?.u_name || 'N/A'} ${data.waiter?.u_last_name || ''}</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span>🕐</span>
+                        <span>${data.order?.issue_date || ''} ${data.order?.time || ''}</span>
+                    </div>
+                </div>
+                <div class="border-t pt-2 mb-2">
+                    <div class="text-xs font-semibold text-gray-700 mb-1">Items (${data.items?.length || 0}):</div>
+                    <div class="text-xs text-gray-600 space-y-0.5">
+                        ${(data.items || []).slice(0, 3).map(item => 
+                            `<div>• ${item.i_quantity}x ${item.i_name}</div>`
+                        ).join('')}
+                        ${data.items?.length > 3 ? `<div class="text-gray-400">... y ${data.items.length - 3} más</div>` : ''}
+                    </div>
+                </div>
+                <div class="flex items-center gap-2 pt-2 border-t">
+                    <span class="badge ${data.printer?.pr_type === 'USB' ? 'badge-usb' : 'badge-red'}">
+                        ${data.printer?.pr_type || 'RED'}
+                    </span>
+                    <span class="text-xs text-gray-500">${printerInfo || 'N/A'}</span>
                 </div>
             `;
             container.insertBefore(card, container.firstChild);
