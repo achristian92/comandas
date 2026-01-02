@@ -26,7 +26,7 @@ class PrintController extends Controller
         ]);
 
         $data = $request['data'];
-
+        
         return match ($data['type']) {
             'Comanda' => $this->command($data, $instanceId, $eventId),
             'Comprobante' => $this->voucher($data),
@@ -137,10 +137,10 @@ class PrintController extends Controller
 
     private function command($data, $instanceId = 'unknown', $eventId = 'unknown')
     {
-
         $companyUuid = $data['company']['uuid'] ?? null;
         $commandUuid = $data['uuid'] ?? null;
         $numCommand = $data['num'] ?? null;
+        $attempts = $data['attempts'] ?? null;
 
 
         Log::info('🟡 PROCESANDO COMMAND', [
@@ -161,7 +161,7 @@ class PrintController extends Controller
                 'printer_ip' => $detail['printer']['pr_ip'] ?? null,
             ]);
 
-            $ok = $this->printCocinaDetail($detail, $data['created_at'] ?? null,$numCommand ?? null);
+            $ok = $this->printCocinaDetail($detail, $data['created_at'] ?? null,$numCommand ?? null, $attempts ?? 1);
             if (!$ok) {
                 $allOk = false;
             }
@@ -196,7 +196,7 @@ class PrintController extends Controller
         }
     }
 
-    private function printCocinaDetail(array $detail, $issueDate = null, $numCommand = null): bool
+    private function printCocinaDetail(array $detail, $issueDate = null, $numCommand = null, $attempts = 1): bool
     {
         $printerIp = $detail['printer']['pr_ip'] ?? null;
         $printerPort = $detail['printer']['pr_port'] ?? '9100';
@@ -227,7 +227,7 @@ class PrintController extends Controller
 
         $port = (int) $printerPort;
         $lines = [];
-        $lines[] = 'COMANDA: #'.$numCommand;
+        $lines[] = 'COMANDA: #'.$numCommand.' - '.($attempts > 1 ? 'Intento '.$attempts : '');
         if ($issueDate) {
             $lines[] = 'FECHA: ' . (string) $issueDate;
         }
