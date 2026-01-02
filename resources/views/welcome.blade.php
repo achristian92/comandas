@@ -242,6 +242,8 @@
                 const eventId = Math.random().toString(36).substring(7);
                 const timestamp = new Date().toLocaleTimeString();
                 
+                console.log('📝 Tipo de documento recibido:', eventData.type);
+                
                 const detail = eventData.details?.[0] || {};
                 
                 addLog(`Comanda recibida - ${detail.table?.t_name || 'N/A'} - Orden #${detail.order?.num || 'N/A'}`, 'info');
@@ -264,19 +266,31 @@
                     if (body.status === 'ok') {
                         stats.success++;
                         addLog(`✅ Impresión exitosa - ${detail.table?.t_name}`, 'success');
-                        addRecentCommand(detail, true, true);
-                        saveCommand(detail, true, eventData.type || 'Command');
+                        
+                        // Solo mostrar en dashboard si es tipo "Comanda"
+                        if (eventData.type === 'Comanda') {
+                            addRecentCommand(detail, true, true, eventData.num);
+                        }
+                        saveCommand(detail, true, eventData.type || 'Comanda');
                     } else {
                         stats.failed++;
                         addLog(`❌ Error: ${body.message}`, 'error');
-                        addRecentCommand(detail, false, true);
-                        saveCommand(detail, false, eventData.type || 'Command');
+                        
+                        // Solo mostrar en dashboard si es tipo "Comanda"
+                        if (eventData.type === 'Comanda') {
+                            addRecentCommand(detail, false, true, eventData.num);
+                        }
+                        saveCommand(detail, false, eventData.type || 'Comanda');
                     }
                 } catch (err) {
                     stats.failed++;
                     addLog(`❌ Error de conexión: ${err.message}`, 'error');
-                    addRecentCommand(detail, false, true);
-                    saveCommand(detail, false, eventData.type || 'Command');
+                    
+                    // Solo mostrar en dashboard si es tipo "Comanda"
+                    if (eventData.type === 'Comanda') {
+                        addRecentCommand(detail, false, true, eventData.num);
+                    }
+                    saveCommand(detail, false, eventData.type || 'Comanda');
                 }
                 
                 updateStats();
@@ -362,7 +376,7 @@
             if (log.children.length > 50) log.removeChild(log.lastChild);
         }
 
-        function addRecentCommand(data, success, shouldSave = true) {
+        function addRecentCommand(data, success, shouldSave = true, comandaNum = null) {
             const container = document.getElementById('recentCommands');
             if (container.querySelector('.text-center')) container.innerHTML = '';
             
@@ -373,11 +387,16 @@
                 ? data.printer?.pr_name 
                 : data.printer?.pr_ip;
             
+            const displayNum = comandaNum || data.num || 'N/A';
+            
             card.innerHTML = `
                 <div class="flex items-center justify-between mb-3">
                     <div>
-                        <span class="font-bold text-gray-800 text-lg">${data.table?.t_name || 'N/A'}</span>
-                        <span class="text-gray-500 text-sm ml-2">Orden #${data.order?.num || 'N/A'}</span>
+                        <span class="font-bold text-gray-800 text-lg">#${displayNum}</span>
+                        <span class="text-gray-500 text-sm mx-2">|</span>
+                        <span class="text-gray-700 text-base">Orden #${data.order?.num || 'N/A'}</span>
+                        <span class="text-gray-500 text-sm mx-2">|</span>
+                        <span class="text-gray-700 text-base">${data.table?.t_name || 'N/A'}</span>
                     </div>
                     <span class="badge ${success ? 'badge-success' : 'badge-error'}">${success ? 'Exitosa' : 'Fallida'}</span>
                 </div>
