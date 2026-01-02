@@ -28,9 +28,9 @@ class PrintController extends Controller
         $data = $request['data'];
 
         return match ($data['type']) {
-            'Command' => $this->command($data, $instanceId, $eventId),
-            'Voucher' => $this->voucher($data),
-            'PreAccount' => $this->preAccount($data),
+            'Comanda' => $this->command($data, $instanceId, $eventId),
+            'Comprobante' => $this->voucher($data),
+            'Pre-Cuenta' => $this->preAccount($data),
             default   => response()->json(['status' => 'error'], 400),
         };
     }
