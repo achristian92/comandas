@@ -226,31 +226,49 @@ class PrintController extends Controller
         }
 
         $port = (int) $printerPort;
-        $lines = [];
-        $lines[] = 'COMANDA: #'.$numCommand.' - '.($attempts > 1 ? 'Intento '.$attempts : '');
-        if ($issueDate) {
-            $lines[] = 'FECHA: ' . (string) $issueDate;
+        
+        // Construir el payload con formato mejorado
+        $payload = "\x1B\x21\x30"; // Doble altura y ancho para título
+        $payload .= "COMANDA #" . $numCommand . "\n";
+        if ($attempts > 1) {
+            $payload .= "(Intento " . $attempts . ")\n";
         }
-        $lines[] = 'MESA: ' . ($detail['table']['t_name'] ?? '-');
-        $lines[] = 'SALON: ' . ($detail['table']['t_salon'] ?? '-');
-        $lines[] = 'CLIENTE: ' . ($detail['client']['c_name'] ?? '-');
-        $lines[] = 'MOZO: ' . ($detail['waiter']['u_name'] ?? '-');
-        $lines[] = str_repeat('-', 32);
+        $payload .= "\x1B\x21\x00"; // Resetear tamaño
+        $payload .= "\n";
+        
+        if ($issueDate) {
+            $payload .= 'FECHA: ' . (string) $issueDate . "\n";
+        }
+        $payload .= "\n";
+        
+        $payload .= "\x1B\x21\x08"; // Negrita
+        $payload .= 'MESA: ' . ($detail['table']['t_name'] ?? '-') . "\n";
+        $payload .= 'SALON: ' . ($detail['table']['t_salon'] ?? '-') . "\n";
+        $payload .= "\x1B\x21\x00"; // Resetear
+        $payload .= "\n";
+        
+        $payload .= 'CLIENTE: ' . ($detail['client']['c_name'] ?? '-') . "\n";
+        $payload .= 'MOZO: ' . ($detail['waiter']['u_name'] ?? '-') . "\n";
+        $payload .= str_repeat('=', 32) . "\n";
+        $payload .= "\n";
 
         foreach (($detail['items'] ?? []) as $item) {
             $qty = (string) ($item['i_quantity'] ?? '1');
             $name = (string) ($item['i_name'] ?? '');
-            $lines[] = $qty . '  ' . $name;
+            
+            $payload .= "\x1B\x21\x10"; // Doble altura
+            $payload .= $qty . '  ' . $name . "\n";
+            $payload .= "\x1B\x21\x00"; // Resetear
 
-
-            // Agregar nota del ítem si existe
             $note = trim((string) ($item['i_notes'] ?? ''));
             if ($note !== '') {
-                $lines[] = '   NOTA: ' . $note;
+                $payload .= '   NOTA: ' . $note . "\n";
             }
+            $payload .= "\n";
         }
-
-        $payload = PrintService::buildEscposPayload($lines, 4, true);
+        
+        $payload .= "\x1B\x64\x04"; // 4 líneas de avance
+        $payload .= "\x1D\x56\x00"; // Cortar papel
 
         $metadata = [
             'printer_type' => $printerType,
@@ -298,14 +316,26 @@ class PrintController extends Controller
         }
 
         $port = (int) $printerPort;
-        $lines = [];
-        $lines[] = 'PRE-CUENTA';
-        $lines[] = 'FECHA: ' . (string) ($detail['order']['issue_date'] ?? '-');
-        $lines[] = 'MESA: ' . ($detail['table']['t_name'] ?? '-');
-        $lines[] = 'SALON: ' . ($detail['table']['t_salon'] ?? '-');
-        $lines[] = 'CLIENTE: ' . ($detail['client']['c_name'] ?? '-');
-        $lines[] = 'MOZO: ' . ($detail['waiter']['u_name'] ?? '-');
-        $lines[] = str_repeat('-', 32);
+        
+        // Construir el payload con formato mejorado
+        $payload = "\x1B\x21\x30"; // Doble altura y ancho para título
+        $payload .= "PRE-CUENTA\n";
+        $payload .= "\x1B\x21\x00"; // Resetear tamaño
+        $payload .= "\n";
+        
+        $payload .= 'FECHA: ' . (string) ($detail['order']['issue_date'] ?? '-') . "\n";
+        $payload .= "\n";
+        
+        $payload .= "\x1B\x21\x08"; // Negrita
+        $payload .= 'MESA: ' . ($detail['table']['t_name'] ?? '-') . "\n";
+        $payload .= 'SALON: ' . ($detail['table']['t_salon'] ?? '-') . "\n";
+        $payload .= "\x1B\x21\x00"; // Resetear
+        $payload .= "\n";
+        
+        $payload .= 'CLIENTE: ' . ($detail['client']['c_name'] ?? '-') . "\n";
+        $payload .= 'MOZO: ' . ($detail['waiter']['u_name'] ?? '-') . "\n";
+        $payload .= str_repeat('=', 32) . "\n";
+        $payload .= "\n";
 
         $total = 0.0;
         foreach (($detail['items'] ?? []) as $item) {
@@ -315,20 +345,39 @@ class PrintController extends Controller
             $free = (bool) ($item['i_free'] ?? false);
             $lineTotal = $free ? 0.0 : ($qty * $price);
             $total += $lineTotal;
-            $lines[] = (string) ((int) $qty) . '  ' . $name;
-            $lines[] = '    ' . ($free ? 'GRATIS' : number_format($lineTotal, 2, '.', ''));
+            
+            $payload .= "\x1B\x21\x10"; // Doble altura
+            $payload .= (string) ((int) $qty) . '  ' . $name . "\n";
+            $payload .= "\x1B\x21\x00"; // Resetear
+            
+            $priceText = $free ? 'GRATIS' : number_format($lineTotal, 2, '.', '');
+            $payload .= str_pad('', 4) . $priceText . "\n";
+            $payload .= "\n";
         }
 
-        $lines[] = str_repeat('-', 32);
-        $lines[] = 'TOTAL: ' . number_format($total, 2, '.', '');
-        $lines[] = '';
-        $lines[] = 'RUC/DNI: _______________________';
-        $lines[] = '';
-        $lines[] = 'RAZON SOCIAL/NOMBRE:';
-        $lines[] = '_______________________________';
-        $lines[] = '';
-
-        $payload = PrintService::buildEscposPayload($lines, 4, true);
+        $payload .= str_repeat('=', 32) . "\n";
+        $payload .= "\x1B\x21\x20"; // Doble ancho
+        $payload .= 'TOTAL: ' . number_format($total, 2, '.', '') . "\n";
+        $payload .= "\x1B\x21\x00"; // Resetear
+        $payload .= str_repeat('=', 32) . "\n";
+        $payload .= "\n";
+        $payload .= "\n";
+        
+        $payload .= "\x1B\x21\x08"; // Negrita
+        $payload .= 'RUC/DNI:'  . "\n";
+        $payload .= "\x1B\x21\x00"; // Resetear
+        $payload .= '_______________________________' . "\n";
+        $payload .= "\n";
+        $payload .= "\x1B\x21\x08"; // Negrita
+        $payload .= 'RAZON SOCIAL/NOMBRE:' . "\n";
+        $payload .= "\x1B\x21\x00"; // Resetear
+        $payload .= '_______________________________' . "\n";
+        $payload .= "\n";
+        $payload .= '_______________________________' . "\n";
+        $payload .= "\n";
+        
+        $payload .= "\x1B\x64\x04"; // 4 líneas de avance
+        $payload .= "\x1D\x56\x00"; // Cortar papel
 
         $metadata = [
             'printer_type' => $printerType,
