@@ -256,15 +256,12 @@ class PrintController extends Controller
             $qty = (string) ($item['i_quantity'] ?? '1');
             $name = (string) ($item['i_name'] ?? '');
             
-            $payload .= "\x1B\x21\x10"; // Doble altura
             $payload .= $qty . '  ' . $name . "\n";
-            $payload .= "\x1B\x21\x00"; // Resetear
 
             $note = trim((string) ($item['i_notes'] ?? ''));
             if ($note !== '') {
                 $payload .= '   NOTA: ' . $note . "\n";
             }
-            $payload .= "\n";
         }
         
         $payload .= "\x1B\x64\x04"; // 4 líneas de avance
@@ -346,13 +343,10 @@ class PrintController extends Controller
             $lineTotal = $free ? 0.0 : ($qty * $price);
             $total += $lineTotal;
             
-            $payload .= "\x1B\x21\x10"; // Doble altura
             $payload .= (string) ((int) $qty) . '  ' . $name . "\n";
-            $payload .= "\x1B\x21\x00"; // Resetear
             
             $priceText = $free ? 'GRATIS' : number_format($lineTotal, 2, '.', '');
             $payload .= str_pad('', 4) . $priceText . "\n";
-            $payload .= "\n";
         }
 
         $payload .= str_repeat('=', 32) . "\n";
