@@ -140,7 +140,7 @@ class PrintController extends Controller
 
         $companyUuid = $data['company']['uuid'] ?? null;
         $commandUuid = $data['uuid'] ?? null;
-
+        $numCommand = $data['num'] ?? null;
 
 
         Log::info('🟡 PROCESANDO COMMAND', [
@@ -161,7 +161,7 @@ class PrintController extends Controller
                 'printer_ip' => $detail['printer']['pr_ip'] ?? null,
             ]);
 
-            $ok = $this->printCocinaDetail($detail, $data['created_at'] ?? null);
+            $ok = $this->printCocinaDetail($detail, $data['created_at'] ?? null,$numCommand ?? null);
             if (!$ok) {
                 $allOk = false;
             }
@@ -196,7 +196,7 @@ class PrintController extends Controller
         }
     }
 
-    private function printCocinaDetail(array $detail, $issueDate = null): bool
+    private function printCocinaDetail(array $detail, $issueDate = null, $numCommand = null): bool
     {
         $printerIp = $detail['printer']['pr_ip'] ?? null;
         $printerPort = $detail['printer']['pr_port'] ?? '9100';
@@ -227,7 +227,7 @@ class PrintController extends Controller
 
         $port = (int) $printerPort;
         $lines = [];
-        $lines[] = 'COMANDA';
+        $lines[] = 'COMANDA: #'.$numCommand;
         if ($issueDate) {
             $lines[] = 'FECHA: ' . (string) $issueDate;
         }
@@ -321,6 +321,12 @@ class PrintController extends Controller
 
         $lines[] = str_repeat('-', 32);
         $lines[] = 'TOTAL: ' . number_format($total, 2, '.', '');
+        $lines[] = '';
+        $lines[] = 'RUC/DNI: _______________________';
+        $lines[] = '';
+        $lines[] = 'RAZON SOCIAL/NOMBRE:';
+        $lines[] = '_______________________________';
+        $lines[] = '';
 
         $payload = PrintService::buildEscposPayload($lines, 4, true);
 
