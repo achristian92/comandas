@@ -145,8 +145,92 @@
         const channelName = `${companyUuid}.commands`;
         const instanceId = Math.random().toString(36).substring(7);
         
+        // Funciones de localStorage
+        function getTodayDate() {
+            const today = new Date();
+            return today.toISOString().split('T')[0]; // YYYY-MM-DD
+        }
+        
+        function cleanOldCommands() {
+            const today = getTodayDate();
+            const stored = localStorage.getItem('comandas');
+            if (!stored) return;
+            
+            try {
+                const allCommands = JSON.parse(stored);
+                const todayCommands = allCommands.filter(cmd => cmd.date === today);
+                localStorage.setItem('comandas', JSON.stringify(todayCommands));
+                console.log(`🧹 Limpieza: ${allCommands.length - todayCommands.length} comandas antiguas eliminadas`);
+            } catch (e) {
+                console.error('Error limpiando comandas:', e);
+                localStorage.removeItem('comandas');
+            }
+        }
+        
+        function saveCommand(data, success, type = 'Command') {
+            const today = getTodayDate();
+            const command = {
+                date: today,
+                timestamp: new Date().toISOString(),
+                success: success,
+                type: type,
+                data: data
+            };
+            
+            try {
+                const stored = localStorage.getItem('comandas');
+                const commands = stored ? JSON.parse(stored) : [];
+                commands.unshift(command); // Agregar al inicio
+                
+                // Mantener máximo 100 comandas
+                if (commands.length > 100) {
+                    commands.splice(100);
+                }
+                
+                localStorage.setItem('comandas', JSON.stringify(commands));
+            } catch (e) {
+                console.error('Error guardando comanda:', e);
+            }
+        }
+        
+        function loadTodayCommands() {
+            const today = getTodayDate();
+            const stored = localStorage.getItem('comandas');
+            if (!stored) return;
+            
+            try {
+                const allCommands = JSON.parse(stored);
+                // Filtrar solo comandas del día actual tipo 'Comanda' (no precuentas 'Pre-Cuenta')
+                const todayCommands = allCommands.filter(cmd => 
+                    cmd.date === today && cmd.type === 'Comanda'
+                );
+                
+                // Cargar comandas del día en orden inverso (más recientes primero)
+                todayCommands.forEach(cmd => {
+                    addRecentCommand(cmd.data, cmd.success, false); // false = no guardar de nuevo
+                    if (cmd.success) {
+                        stats.success++;
+                    } else {
+                        stats.failed++;
+                    }
+                    stats.total++;
+                });
+                
+                updateStats();
+                addLog(`📦 ${todayCommands.length} comandas del día cargadas (solo tipo COMANDA)`, 'info');
+            } catch (e) {
+                console.error('Error cargando comandas:', e);
+            }
+        }
+        
+        // Limpiar comandas antiguas al iniciar
+        cleanOldCommands();
+        
         document.getElementById('instanceDisplay').textContent = instanceId;
         addLog('Sistema iniciado', 'info');
+        
+        // Cargar comandas del día
+        loadTodayCommands();
 
         // Listener genérico para ver todos los eventos
         Echo.connector.pusher.bind_global((eventName, data) => {
@@ -180,16 +264,19 @@
                     if (body.status === 'ok') {
                         stats.success++;
                         addLog(`✅ Impresión exitosa - ${detail.table?.t_name}`, 'success');
-                        addRecentCommand(detail, true);
+                        addRecentCommand(detail, true, true);
+                        saveCommand(detail, true, eventData.type || 'Command');
                     } else {
                         stats.failed++;
                         addLog(`❌ Error: ${body.message}`, 'error');
-                        addRecentCommand(detail, false);
+                        addRecentCommand(detail, false, true);
+                        saveCommand(detail, false, eventData.type || 'Command');
                     }
                 } catch (err) {
                     stats.failed++;
                     addLog(`❌ Error de conexión: ${err.message}`, 'error');
-                    addRecentCommand(detail, false);
+                    addRecentCommand(detail, false, true);
+                    saveCommand(detail, false, eventData.type || 'Command');
                 }
                 
                 updateStats();
@@ -220,16 +307,19 @@
                     if (body.status === 'ok') {
                         stats.success++;
                         addLog(`✅ Precuenta impresa exitosamente - ${detail.table?.t_name}`, 'success');
-                        addRecentCommand(detail, true);
+                        // No mostrar precuentas en el dashboard
+                        saveCommand(detail, true, eventData.type || 'Pre-Cuenta');
                     } else {
                         stats.failed++;
                         addLog(`❌ Error en precuenta: ${body.message}`, 'error');
-                        addRecentCommand(detail, false);
+                        // No mostrar precuentas en el dashboard
+                        saveCommand(detail, false, eventData.type || 'Pre-Cuenta');
                     }
                 } catch (err) {
                     stats.failed++;
                     addLog(`❌ Error de conexión en precuenta: ${err.message}`, 'error');
-                    addRecentCommand(detail, false);
+                    // No mostrar precuentas en el dashboard
+                    saveCommand(detail, false, eventData.type || 'Pre-Cuenta');
                 }
                 
                 updateStats();
@@ -272,7 +362,7 @@
             if (log.children.length > 50) log.removeChild(log.lastChild);
         }
 
-        function addRecentCommand(data, success) {
+        function addRecentCommand(data, success, shouldSave = true) {
             const container = document.getElementById('recentCommands');
             if (container.querySelector('.text-center')) container.innerHTML = '';
             
